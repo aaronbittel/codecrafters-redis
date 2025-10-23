@@ -1,6 +1,7 @@
 import logging
 import socket
 import threading
+import time
 from collections import namedtuple
 
 logger = logging.getLogger("SERVER")
@@ -17,11 +18,11 @@ Echo = namedtuple("Echo", ["msg"])
 
 def main():
     with socket.create_server(("", PORT), reuse_port=True) as server_sock:
-        logger.info(f"Started on port {PORT}")
+        logger.info("Started on port %d", PORT)
 
         while True:
             client_sock, addr = server_sock.accept()
-            logger.info(f"client with addr {addr[1]} connected.")
+            logger.info("client with addr %d connected.", addr[1])
             threading.Thread(target=handle_connection, args=(client_sock,)).start()
 
 
@@ -30,12 +31,13 @@ def handle_connection(sock: socket.socket) -> None:
         data = sock.recv(1024)
         if not data:
             break
-        logger.info(f"Received: {repr(data.decode())}")
+        logger.info("Received: %s", {repr(data.decode())})
         cmd_list = parse_data(data)
+        logger.info("parsed cmd_list: %s", cmd_list)
         resp_str = handle_command(cmd_list)
         sock.sendall(resp_str.encode())
 
-    logger.info(f"client {sock.getsockname()[1]} disconnected.")
+    logger.info("client %d disconnected.", sock.getsockname()[1])
     sock.close()
 
 
@@ -49,16 +51,23 @@ def handle_command(cmd_list: list[str]) -> str:
     if cmd == "PING":
         return "+PONG\r\n"
     elif cmd == "ECHO":
-        assert len(cmd_list) == 2, "expected value for echo"
+        assert len(cmd_list) == 2, "expected value for echo cmd"
         return as_bulk_str(cmd_list[1])
     elif cmd == "SET":
-        assert len(cmd_list) == 3, "expected key and value for set"
-        key, value = cmd_list[1], cmd_list[2]
+        assert len(cmd_list) >= 3, "expected key and value for set cmd"
+        _, key, value, *options = cmd_list
         store[key] = value
-        logging.info("Updated store with key=%s => value=%s", key, value)
+        logger.info("Updated store with key=%s => value=%s", key, value)
+        for i, opt in enumerate(options):
+            if opt.upper() == "PX":
+                assert len(options) > i + 1, "expected millis value for px option"
+                # TODO: check opt[i+1] first
+                ttl = int(options[i + 1])
+                threading.Timer(ttl/1000,function=store.pop, args=(key,)
+                ).start()
         return OK_STR
     elif cmd == "GET":
-        assert len(cmd_list) == 2, "expected key for get"
+        assert len(cmd_list) == 2, "expected key for get cmd"
         key = cmd_list[1]
         value = store.get(key)
         if value:
@@ -70,16 +79,14 @@ def handle_command(cmd_list: list[str]) -> str:
 
 
 def parse_data(raw_data: bytes) -> list[str]:
+    def relevant(s: str) -> bool:
+        return not (s.startswith("*") or s.startswith("$"))
+
     data = raw_data.decode()
     parts = data.strip().split("\r\n")
-    logger.debug("raw parts: %s", parts)
-    cmd_list: list[str] = []
-    for part in parts:
-        if part.startswith("*") or part.startswith("$"):
-            continue
-        cmd_list.append(part)
-    logger.debug("parsed cmd list: %s", parts)
-    return cmd_list
+    return [part for part in parts if relevant(part)]
+
+
 
 
 def as_bulk_str(s: str) -> str:
@@ -87,5 +94,5 @@ def as_bulk_str(s: str) -> str:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.DEBUG)
     main()
