@@ -111,7 +111,7 @@ def handle_command(cmd_list: list[str]) -> str:
         key = args[0]
         return as_integer_str(len(store.get(key, [])))
     elif cmd == "LPOP":
-        assert len(args) == 1, "LPOP cmd: expected key"
+        assert len(args) >= 1, "LPOP cmd: expected key"
         key = args[0]
         li = store.get(key)
         if li is None:
@@ -119,8 +119,16 @@ def handle_command(cmd_list: list[str]) -> str:
         assert isinstance(li, list), f"LPOP cmd: expected {li} to be a list"
         if len(li) == 0:
             return RESP_NULL_BULK_STR
-        item = li.pop(0)
-        return as_bulk_str(item)
+        if len(args) == 1:
+            item = li.pop(0)
+            return as_bulk_str(item)
+        # TODO: Check args[1] for integer
+        count = int(args[1])
+        count = count if count <= len(li) else len(li)
+        popped_items: list[str] = []
+        for _ in range(count):
+            popped_items.append(li.pop(0))
+        return as_array_str(popped_items)
     else:
         logger.error("unexpected command: %s", cmd)
         assert False, "unreachable"
