@@ -7,8 +7,10 @@ from collections import namedtuple
 logger = logging.getLogger("SERVER")
 
 PORT = 6379
-NULL_BULK_STR = "$-1\r\n"
-OK_STR = "+OK\r\n"
+
+RESP_NULL_BULK_STR = "$-1\r\n"
+RESP_OK_STR = "+OK\r\n"
+RESP_EMPTY_ARRAY = "*0\r\n"
 
 store: dict[str, str | list[str]] = {}
 
@@ -31,7 +33,7 @@ def handle_connection(sock: socket.socket) -> None:
         data = sock.recv(1024)
         if not data:
             break
-        logger.info("Received: %s", {repr(data.decode())})
+        logger.debug("Received: %s", {repr(data.decode())})
         cmd_list = parse_data(data)
         logger.info("parsed cmd_list: %s", cmd_list)
         resp_str = handle_command(cmd_list)
@@ -47,34 +49,34 @@ def handle_connection(sock: socket.socket) -> None:
 
 def handle_command(cmd_list: list[str]) -> str:
     assert len(cmd_list) > 0
-    cmd = cmd_list[0].upper()
+    cmd, args = cmd_list[0].upper(), cmd_list[1:]
     if cmd == "PING":
         return "+PONG\r\n"
     elif cmd == "ECHO":
-        assert len(cmd_list) == 2, "expected value for echo cmd"
-        return as_bulk_str(cmd_list[1])
+        assert len(args) == 1, "ECHO cmd: expected value"
+        return as_bulk_str(args[0])
     elif cmd == "SET":
-        assert len(cmd_list) >= 3, "expected key and value for set cmd"
-        _, key, value, *options = cmd_list
+        assert len(args) >= 2, "SET cmd: expected key and value"
+        key, value, *options = args
         store[key] = value
         logger.info("Updated store with key=%s => value=%s", key, value)
         for i, opt in enumerate(options):
             if opt.upper() == "PX":
                 assert len(options) > i + 1, "expected millis value for px option"
-                # TODO: check opt[i+1] first
+                # TODO: check options[i+1] first
                 ttl = int(options[i + 1])
                 threading.Timer(ttl / 1000, function=store.pop, args=(key,)).start()
-        return OK_STR
+        return RESP_OK_STR
     elif cmd == "GET":
-        assert len(cmd_list) == 2, "expected key for get cmd"
-        key = cmd_list[1]
+        assert len(args) == 1, "GET cmd: expected key"
+        key = args[0]
         value = store.get(key)
         if value:
             return as_bulk_str(value)
-        return NULL_BULK_STR
+        return RESP_NULL_BULK_STR
     elif cmd == "RPUSH":
-        assert len(cmd_list) >= 3, "expected key and value for rpush cmd"
-        _, key, *values = cmd_list
+        assert len(args) >= 2, "RPUSH cmd: expected key and value"
+        key, *values = args
         if key not in store:
             store[key] = []
         assert isinstance(store[key], list), (
@@ -83,6 +85,18 @@ def handle_command(cmd_list: list[str]) -> str:
         for value in values:
             store[key].append(value)
         return as_integer_str(len(store[key]))
+    elif cmd == "LRANGE":
+        assert len(args) == 3, "LRANGE cmd: expected key, start, end"
+        # TODO: Check start, end for integer
+        key, start, end = args[0], int(args[1]), int(args[2])
+        li = store.get(key)
+        if li is None:
+            return RESP_EMPTY_ARRAY
+        assert isinstance(li, list), f"LRANGE cmd: expected {li} to be a list"
+        if start >= len(li) or start > end:
+            return RESP_EMPTY_ARRAY
+        end = min(end, len(li) - 1)
+        return as_array_str(li[start : end + 1])
     else:
         logger.error("unexpected command: %s", cmd)
         assert False, "unreachable"
@@ -103,6 +117,13 @@ def as_bulk_str(s: str) -> str:
 
 def as_integer_str(n: int) -> str:
     return f":{n}\r\n"
+
+
+def as_array_str(xs: list[str]) -> str:
+    def fmt(arg: str) -> str:
+        return f"${len(arg)}\r\n{arg}\r\n"
+
+    return f"*{len(xs)}\r\n{''.join(fmt(x) for x in xs)}"
 
 
 if __name__ == "__main__":
