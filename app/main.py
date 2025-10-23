@@ -43,10 +43,6 @@ def handle_connection(sock: socket.socket) -> None:
     sock.close()
 
 
-# [PING] = *1\r\n$4\r\nPING\r\n
-# [ECHO, hey] = *2\r\n$4\r\nECHO\r\n$3\r\nhey\r\n
-
-
 def handle_command(cmd_list: list[str]) -> str:
     assert len(cmd_list) > 0
     cmd, args = cmd_list[0].upper(), cmd_list[1:]
@@ -93,9 +89,11 @@ def handle_command(cmd_list: list[str]) -> str:
         if li is None:
             return RESP_EMPTY_ARRAY
         assert isinstance(li, list), f"LRANGE cmd: expected {li} to be a list"
+        if start < 0:
+            start = len(li) + start if start >= -len(li) else 0
+        end = min(end if end >= 0 else len(li) + end, len(li) - 1)
         if start >= len(li) or start > end:
             return RESP_EMPTY_ARRAY
-        end = min(end, len(li) - 1)
         return as_array_str(li[start : end + 1])
     else:
         logger.error("unexpected command: %s", cmd)
