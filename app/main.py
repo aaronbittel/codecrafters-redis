@@ -106,6 +106,10 @@ def handle_command(cmd_list: list[str]) -> str:
         for value in values:
             store[key].insert(0, value)
         return as_integer_str(len(store[key]))
+    elif cmd == "LLEN":
+        assert len(args) == 1, "LLEN cmd: expected key"
+        key = args[0]
+        return as_integer_str(len(store.get(key, [])))
     else:
         logger.error("unexpected command: %s", cmd)
         assert False, "unreachable"
