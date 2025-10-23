@@ -6,8 +6,9 @@ def main():
     client_sock, addr = server_socket.accept()
     print(f"client with addr {addr} connected.")
 
-    client_sock.recv(1024)
-    client_sock.send(b"+PONG\r\n")
+    while True:
+        client_sock.recv(1024)
+        client_sock.sendall(b"+PONG\r\n")
 
 
 if __name__ == "__main__":
