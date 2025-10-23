@@ -10,7 +10,7 @@ PORT = 6379
 NULL_BULK_STR = "$-1\r\n"
 OK_STR = "+OK\r\n"
 
-store: dict[str, str] = {}
+store: dict[str, str | list[str]] = {}
 
 Ping = namedtuple("Ping", [])
 Echo = namedtuple("Echo", ["msg"])
@@ -63,8 +63,7 @@ def handle_command(cmd_list: list[str]) -> str:
                 assert len(options) > i + 1, "expected millis value for px option"
                 # TODO: check opt[i+1] first
                 ttl = int(options[i + 1])
-                threading.Timer(ttl/1000,function=store.pop, args=(key,)
-                ).start()
+                threading.Timer(ttl / 1000, function=store.pop, args=(key,)).start()
         return OK_STR
     elif cmd == "GET":
         assert len(cmd_list) == 2, "expected key for get cmd"
@@ -73,6 +72,16 @@ def handle_command(cmd_list: list[str]) -> str:
         if value:
             return as_bulk_str(value)
         return NULL_BULK_STR
+    elif cmd == "RPUSH":
+        assert len(cmd_list) == 3, "expected key and value for rpush cmd"
+        key, value = cmd_list[1], cmd_list[2]
+        li = store.get(key)
+        if li:
+            assert isinstance(li, list), f"expected {li} to be a list for rpush cmd"
+            store[key].append(value)
+        else:
+            store[key] = [value]
+        return as_integer_str(len(store[key]))
     else:
         logger.error("unexpected command: %s", cmd)
         assert False, "unreachable"
@@ -87,10 +96,12 @@ def parse_data(raw_data: bytes) -> list[str]:
     return [part for part in parts if relevant(part)]
 
 
-
-
 def as_bulk_str(s: str) -> str:
     return f"${len(s)}\r\n{s}\r\n"
+
+
+def as_integer_str(n: int) -> str:
+    return f":{n}\r\n"
 
 
 if __name__ == "__main__":
