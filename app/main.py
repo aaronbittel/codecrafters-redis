@@ -73,14 +73,15 @@ def handle_command(cmd_list: list[str]) -> str:
             return as_bulk_str(value)
         return NULL_BULK_STR
     elif cmd == "RPUSH":
-        assert len(cmd_list) == 3, "expected key and value for rpush cmd"
-        key, value = cmd_list[1], cmd_list[2]
-        li = store.get(key)
-        if li:
-            assert isinstance(li, list), f"expected {li} to be a list for rpush cmd"
+        assert len(cmd_list) >= 3, "expected key and value for rpush cmd"
+        _, key, *values = cmd_list
+        if key not in store:
+            store[key] = []
+        assert isinstance(store[key], list), (
+            f"expected {store[key]} to be a list for rpush cmd"
+        )
+        for value in values:
             store[key].append(value)
-        else:
-            store[key] = [value]
         return as_integer_str(len(store[key]))
     else:
         logger.error("unexpected command: %s", cmd)
