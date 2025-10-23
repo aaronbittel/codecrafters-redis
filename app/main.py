@@ -76,7 +76,7 @@ def handle_command(cmd_list: list[str]) -> str:
         if key not in store:
             store[key] = []
         assert isinstance(store[key], list), (
-            f"expected {store[key]} to be a list for rpush cmd"
+            f"RPUSH cmd: expected {store[key]} to be a list"
         )
         for value in values:
             store[key].append(value)
@@ -95,6 +95,17 @@ def handle_command(cmd_list: list[str]) -> str:
         if start >= len(li) or start > end:
             return RESP_EMPTY_ARRAY
         return as_array_str(li[start : end + 1])
+    elif cmd == "LPUSH":
+        assert len(args) >= 2, "LPUSH cmd: expected key and value"
+        key, *values = args
+        if key not in store:
+            store[key] = []
+        assert isinstance(store[key], list), (
+            f"LPUSH cmd: expected {store[key]} to be a list"
+        )
+        for value in values:
+            store[key].insert(0, value)
+        return as_integer_str(len(store[key]))
     else:
         logger.error("unexpected command: %s", cmd)
         assert False, "unreachable"
