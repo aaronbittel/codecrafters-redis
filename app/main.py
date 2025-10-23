@@ -11,11 +11,9 @@ PORT = 6379
 RESP_NULL_BULK_STR = "$-1\r\n"
 RESP_OK_STR = "+OK\r\n"
 RESP_EMPTY_ARRAY = "*0\r\n"
+RESP_NULL_ARRAY = "*-1\r\n"
 
 store: dict[str, str | list[str]] = {}
-
-Ping = namedtuple("Ping", [])
-Echo = namedtuple("Echo", ["msg"])
 
 
 def main():
@@ -125,13 +123,36 @@ def handle_command(cmd_list: list[str]) -> str:
         # TODO: Check args[1] for integer
         count = int(args[1])
         count = count if count <= len(li) else len(li)
-        popped_items: list[str] = []
-        for _ in range(count):
-            popped_items.append(li.pop(0))
-        return as_array_str(popped_items)
+        return as_array_str([li.pop(0) for _ in range(count)])
+    elif cmd == "BLPOP":
+        assert len(args) == 2, "BLPOP cmd: expected key and timeout"
+        # TODO: Check args[1] for integer
+        key, timeout = args[0], float(args[1])
+        item: str | None = None
+        sleep_time_s = 50 / 1000
+        cur_time = 0.0
+        while True:
+            item = get_item(key)
+            if item is not None:
+                return as_array_str([key, item])
+            elif timeout != 0 and cur_time >= timeout:
+                # timeout hit
+                return RESP_NULL_ARRAY
+            cur_time += sleep_time_s
+            time.sleep(sleep_time_s)
     else:
         logger.error("unexpected command: %s", cmd)
         assert False, "unreachable"
+
+
+def get_item(key: str) -> str | None:
+    li = store.get(key)
+    if li is None:
+        return None
+    assert isinstance(li, list), f"BLPOP cmd: expected {li} to be a list"
+    if len(li) > 0:
+        return li.pop(0)
+    return None
 
 
 def parse_data(raw_data: bytes) -> list[str]:
