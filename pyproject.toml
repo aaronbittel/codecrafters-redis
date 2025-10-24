@@ -1,0 +1,18 @@
+[project]
+name = "codecrafters-redis-python"
+version = "0.1.0"
+description = "Python Implementation of Redis Server"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.2",
+    "redis>=7.0.0",
+]
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q"
+testpaths = [ "tests" ]
