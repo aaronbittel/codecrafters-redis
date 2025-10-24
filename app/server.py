@@ -12,6 +12,7 @@ from app.resp import (
     as_bulk_bytes,
     as_error_bytes,
     as_integer_bytes,
+    as_simple_string_bytes,
 )
 
 logger = logging.getLogger("SERVER")
@@ -176,6 +177,12 @@ class Server:
                     return resp.NULL_ARRAY_BYTES
                 cur_time += sleep_time_s
                 time.sleep(sleep_time_s)
+        elif cmd.name == "TYPE":
+            if len(cmd.args) != 1:
+                return as_error_bytes("TYPE cmd: expected key")
+            key = cmd.args[0]
+            typ = "string" if key in self.store else "none"
+            return as_simple_string_bytes(typ)
         else:
             logger.error("unexpected command: %s", cmd)
             return as_error_bytes(f"unknown command {cmd.name}")

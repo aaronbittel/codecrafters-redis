@@ -80,6 +80,10 @@ def as_error_bytes(msg: str) -> bytes:
     return f"-ERR {msg}\r\n".encode()
 
 
+def as_simple_string_bytes(s: str) -> bytes:
+    return f"+{s}\r\n".encode()
+
+
 def _safe_read(reader: BufferedReader, size: int) -> bytes:
     data = reader.read(size)
     if not data:
