@@ -98,7 +98,7 @@ class StreamID:
     @classmethod
     def from_str(cls, s: str) -> Self:
         if s == "*":
-            return cls(None, None)
+            return cls(int(time.time() * 1000), None)
         millis, seq = s.split("-", maxsplit=1)
         millis = int(millis)
         if seq == "*":
