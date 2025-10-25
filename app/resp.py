@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import time
 from dataclasses import dataclass, field
 from io import BufferedReader
 from typing import IO, Self
@@ -48,8 +50,32 @@ class Command:
 class Stream:
     values: list[StreamValue] = field(default_factory=list)
 
-    def append(self, value: StreamValue) -> None:
-        self.values.append(value)
+    def append(self, id_str: str, values: dict[str, str]) -> None:
+        given_id = StreamID.from_str(id_str)
+        resolved_id = (
+            self._resolve_id(given_id) if given_id.sequence_number is None else given_id
+        )
+        assert resolved_id.milliseconds_time is not None
+        assert resolved_id.sequence_number is not None
+        if resolved_id == StreamID(0, 0):
+            raise ValueError("The ID specified in XADD must be greater than 0-0")
+        if len(self.values) >= 1 and self.values[-1].id >= resolved_id:
+            raise ValueError(
+                "The ID specified in XADD is equal or smaller than the target stream top item"
+            )
+        self.values.append(StreamValue(id=resolved_id, values=values))
+
+    def _resolve_id(self, given_id: StreamID) -> StreamID:
+        last_id = self.values[-1].id if len(self.values) > 0 else None
+        if given_id.milliseconds_time == 0:
+            given_id.sequence_number = 1
+        elif len(self.values) == 0:
+            given_id.sequence_number = 0
+        elif last_id and last_id.milliseconds_time == given_id.milliseconds_time:
+            given_id.sequence_number = last_id.sequence_number + 1
+        else:
+            given_id.sequence_number = 0
+        return given_id
 
     def __getitem__(self, i: int) -> StreamValue:
         return self.values[i]
@@ -66,13 +92,18 @@ class StreamValue:
 
 @dataclass(order=True)
 class StreamID:
-    milliseconds_time: int
-    sequence_number: int
+    milliseconds_time: int | None
+    sequence_number: int | None
 
     @classmethod
     def from_str(cls, s: str) -> Self:
-        milli, seq = map(int, s.split("-", maxsplit=1))
-        return cls(milli, seq)
+        if s == "*":
+            return cls(None, None)
+        millis, seq = s.split("-", maxsplit=1)
+        millis = int(millis)
+        if seq == "*":
+            return cls(milliseconds_time=millis, sequence_number=None)
+        return cls(milliseconds_time=millis, sequence_number=int(seq))
 
     def __str__(self) -> str:
         return f"{self.milliseconds_time}-{self.sequence_number}"
