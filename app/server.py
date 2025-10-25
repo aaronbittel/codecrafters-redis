@@ -8,6 +8,7 @@ from app import resp
 from app.config import PORT
 from app.resp import (
     Command,
+    Stream,
     as_array_bytes,
     as_bulk_bytes,
     as_error_bytes,
@@ -22,7 +23,8 @@ class Server:
     def __init__(self, host: str = "localhost", port: int = PORT) -> None:
         self.host = host
         self.port = port
-        self.store: dict[str, str | list[str]] = {}
+        # TODO: Improve this
+        self.store: dict[str, str | list[str] | resp.Stream] = {}
         self.stop_event = threading.Event()
 
     def start(self) -> None:
@@ -181,8 +183,23 @@ class Server:
             if len(cmd.args) != 1:
                 return as_error_bytes("TYPE cmd: expected key")
             key = cmd.args[0]
-            typ = "string" if key in self.store else "none"
+            typ = ""
+            if key not in self.store:
+                typ = "none"
+            elif isinstance(self.store[key], resp.Stream):
+                typ = "stream"
+            else:
+                typ = "string"
             return as_simple_string_bytes(typ)
+        elif cmd.name == "XADD":
+            # NOTE: What to do if no key-value pairs a given?
+            if len(cmd.args) <= 2:
+                return as_error_bytes("XADD cmd: expected key, id")
+            key, id, *values = cmd.args
+            if len(values) % 2 != 0:
+                return as_error_bytes("XADD cmd: no value given for key")
+            self.store[key] = Stream(id=id, values=values)
+            return as_bulk_bytes(id)
         else:
             logger.error("unexpected command: %s", cmd)
             return as_error_bytes(f"unknown command {cmd.name}")

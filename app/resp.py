@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from io import BufferedReader
 from typing import IO, Self
 
@@ -42,6 +42,12 @@ class Command:
             raw_args.append(arg)
         args = list(map(lambda arg: arg.decode(), raw_args))
         return cls(name=args[0].upper(), args=args[1:])
+
+
+@dataclass
+class Stream:
+    id: str
+    values: dict[str, str] = field(default_factory=dict)
 
 
 def create_command(*args: str) -> str:
