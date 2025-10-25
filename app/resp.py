@@ -46,8 +46,36 @@ class Command:
 
 @dataclass
 class Stream:
-    id: str
+    values: list[StreamValue] = field(default_factory=list)
+
+    def append(self, value: StreamValue) -> None:
+        self.values.append(value)
+
+    def __getitem__(self, i: int) -> StreamValue:
+        return self.values[i]
+
+    def __len__(self) -> int:
+        return len(self.values)
+
+
+@dataclass
+class StreamValue:
+    id: StreamID
     values: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(order=True)
+class StreamID:
+    milliseconds_time: int
+    sequence_number: int
+
+    @classmethod
+    def from_str(cls, s: str) -> Self:
+        milli, seq = map(int, s.split("-", maxsplit=1))
+        return cls(milli, seq)
+
+    def __str__(self) -> str:
+        return f"{self.milliseconds_time}-{self.sequence_number}"
 
 
 def create_command(*args: str) -> str:

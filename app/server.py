@@ -8,7 +8,8 @@ from app import resp
 from app.config import PORT
 from app.resp import (
     Command,
-    Stream,
+    StreamID,
+    StreamValue,
     as_array_bytes,
     as_bulk_bytes,
     as_error_bytes,
@@ -195,11 +196,34 @@ class Server:
             # NOTE: What to do if no key-value pairs a given?
             if len(cmd.args) <= 2:
                 return as_error_bytes("XADD cmd: expected key, id")
-            key, id, *values = cmd.args
+            key, id_str, *values = cmd.args
+            if key not in self.store:
+                self.store[key] = resp.Stream()
+            elif not isinstance(self.store[key], resp.Stream):
+                # TODO: Add this to the other commands as well
+                return as_error_bytes(
+                    "XADD cmd: WRONGTYPE Operation against a key holding the wrong kind of value"
+                )
+            stream = self.store[key]
+            assert isinstance(stream, resp.Stream), (
+                f"expected {stream} to be a resp.Stream"
+            )
             if len(values) % 2 != 0:
                 return as_error_bytes("XADD cmd: no value given for key")
-            self.store[key] = Stream(id=id, values=values)
-            return as_bulk_bytes(id)
+            try:
+                id = StreamID.from_str(id_str)
+            except ValueError:
+                return as_error_bytes("XADD cmd: expected int")
+            if id <= StreamID(0, 0):
+                return as_error_bytes(
+                    "The ID specified in XADD must be greater than 0-0"
+                )
+            if len(stream) >= 1 and stream[-1].id >= id:
+                return as_error_bytes(
+                    "The ID specified in XADD is equal or smaller than the target stream top item"
+                )
+            stream.append(StreamValue(id=id, values=values))
+            return as_bulk_bytes(id_str)
         else:
             logger.error("unexpected command: %s", cmd)
             return as_error_bytes(f"unknown command {cmd.name}")
