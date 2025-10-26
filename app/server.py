@@ -293,7 +293,7 @@ class Server:
         li = self.store.get(key)
         if li is None:
             return None
-        assert isinstance(li, list), f"BLPOP cmd: expected {li} to be a list"
+        assert isinstance(li, list), f"BLPOP cmd: expected '{li}' to be a list"
         if len(li) > 0:
             return li.pop(0)
         return None

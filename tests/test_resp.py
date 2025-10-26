@@ -1,5 +1,6 @@
 from re import A
 import shlex
+from concurrent.futures import ThreadPoolExecutor
 import threading
 import time
 from io import BytesIO
@@ -7,6 +8,7 @@ from typing import Generator
 
 import pytest
 
+from app import resp
 from app.client import Client
 from app.resp import (
     Array,
@@ -172,6 +174,32 @@ def test_xread_multiple_streams(server: Server):
     ]
     expected_value = to_redis_value(expected)
     assert res.encode() == expected_value.encode()
+
+
+def test_blpop_timeout(server: Server):
+    res = server.handle_command(Command(name="BLPOP", args=["mylist", "0.01"]))
+    assert res.encode() == resp.NULL_ARRAY.encode()
+
+
+def test_blpop_waits_for_item(server: Server):
+    def delayed_push():
+        time.sleep(0.1)
+        server.handle_command(Command(name="LPUSH", args=["mylist", "value"]))
+
+    import threading
+
+    threading.Thread(target=delayed_push).start()
+
+    with ThreadPoolExecutor() as executor:
+        future = executor.submit(
+            server.handle_command,
+            Command(name="BLPOP", args=["mylist", "1"]),
+        )
+        res = future.result(timeout=2)
+        print("res", res)
+        assert isinstance(res, Array)
+        assert res.values[0] == "mylist"
+        assert res.values[1] == "value"
 
 
 def test_to_redis_value():
