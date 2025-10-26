@@ -17,6 +17,7 @@ from app.resp import (
     SimpleString,
     Stream,
     StreamID,
+    stream_value_to_list,
     to_redis_value,
 )
 
@@ -244,56 +245,45 @@ class Server:
                 f"XRANGE cmd: expected {stream_range} to be a list"
             )
             logger.info("stream_range=%s", stream_range)
-            res = []
-            for entry in stream_range:
-                li = []
-                li.append(str(entry.id))
-                inner = []
-                for key, value in entry.values.items():
-                    inner.append(key)
-                    inner.append(value)
-                li.append(inner)
-                res.append(li)
+            res = [stream_value_to_list(entry) for entry in stream_range]
             logger.info("res=%s", res)
             return to_redis_value(res)
         elif cmd.name == "XREAD":
             # NOTE: currently only 1 stream allowed
-            if len(cmd.args) != 3:
-                return SimpleError("XREAD cmd: expected STREAMS, from")
-            streams_keyword, key, from_exclusive = cmd.args
+            if len(cmd.args) < 3:
+                return SimpleError("XREAD cmd: expected STREAMS,key, from")
+            streams_keyword, *keys_and_ids = cmd.args
             if streams_keyword.upper() != "STREAMS":
                 return SimpleError(
                     f"XREAD cmd: expected STREAMS keyword, but got {streams_keyword}"
                 )
-            start_id = StreamID.from_str(from_exclusive)
-            logger.info("start_id=%s", start_id)
-            # NOTE: Make sure that given id is exclusive
-            start_id.sequence_number += 1
-            logger.info("exclusive: start_id=%s", start_id)
-            if key not in self.store:
-                return SimpleError(f"XREAD cmd: no stream stored with {key}")
-            stream = self.store[key]
-            if not isinstance(stream, Stream):
-                return SimpleError(
-                    "XREAD cmd: WRONGTYPE Operation against a key holding the wrong kind of value"
-                )
-            stream_range = stream[start_id:]
-            assert isinstance(stream_range, list)
+            if len(keys_and_ids) % 2 != 0:
+                return SimpleError("XREAD cmd: missing id for stream key")
+
+            length = len(keys_and_ids) // 2
+            keys = keys_and_ids[:length]
+            ids = keys_and_ids[length:]
+
             outer = []
-            per_streamkey = [key]
-
-            stream_values = []
-            for val in stream_range:
-                li = [str(val.id)]
-                inner = []
-                for k, v in val.values.items():
-                    inner.append(k)
-                    inner.append(v)
-                li.append(inner)
-                stream_values.append(li)
-
-            per_streamkey.append(stream_values)
-            outer.append(per_streamkey)
+            for key, id_str in zip(keys, ids):
+                logger.info("id_str=%s", id_str)
+                start_id = StreamID.from_str(id_str)
+                logger.info("start_id=%s", start_id)
+                # NOTE: Make sure that given id is exclusive
+                start_id.sequence_number += 1
+                logger.info("exclusive: start_id=%s", start_id)
+                if key not in self.store:
+                    return SimpleError(f"XREAD cmd: no stream stored with {key}")
+                stream = self.store[key]
+                if not isinstance(stream, Stream):
+                    return SimpleError(
+                        "XREAD cmd: WRONGTYPE Operation against a key holding the wrong kind of value"
+                    )
+                stream_range = stream[start_id:]
+                assert isinstance(stream_range, list)
+                outer.append(
+                    [key, [stream_value_to_list(entry) for entry in stream_range]]
+                )
             return to_redis_value(outer)
         else:
             logger.error("unexpected command: %s", cmd)

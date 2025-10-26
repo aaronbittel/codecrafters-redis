@@ -116,10 +116,10 @@ class StreamID:
     def from_str_xrange(cls, s: str, *, start: bool) -> Self:
         """start: specifies if is it the start index or the end index."""
         if s == "-":
-            assert start == True
+            assert start
             return cls(0, 0)
         if s == "+":
-            assert start == False
+            assert not start
             return cls(None, None)
         if "-" in s:
             millis, seq = map(int, s.split("-", maxsplit=1))
@@ -233,3 +233,11 @@ def _safe_readline(reader: IO[bytes], limit: int = -1) -> bytes:
     if not line:
         raise ConnectionResetError("client closed connection")
     return line
+
+
+def stream_value_to_list(entry: StreamValue) -> list:
+    # ["id", ["field1", "val1", "field2", "val2", ...]]
+    return [
+        str(entry.id),
+        [item for pair in entry.values.items() for item in pair],  # flatten dict
+    ]

@@ -23,7 +23,13 @@ TEST_PORT = 6666
 
 
 @pytest.fixture(name="server")
-def redis_server() -> Generator[None, None, None]:
+def redis_server() -> Generator[Server, None, None]:
+    server = Server()
+    yield server
+
+
+@pytest.fixture(name="server_tcp")
+def redis_server_tcp() -> Generator[None, None, None]:
     server = Server(port=TEST_PORT)
     server_t = threading.Thread(target=server.start)
     server_t.start()
@@ -36,7 +42,7 @@ def redis_server() -> Generator[None, None, None]:
 
 
 @pytest.fixture(name="client")
-def redis_client(server: Server) -> Generator[Client, None, None]:
+def redis_client(server_tcp: Server) -> Generator[Client, None, None]:
     client = Client(port=TEST_PORT)
     client.connect()
     yield client
@@ -106,8 +112,7 @@ def test_stream_slicing(start: str, expected_len: int):
         ("0-2", "+", [["0-2", ["bar", "baz"]], ["0-3", ["baz", "foo"]]]),
     ],
 )
-def test_xadd_and_xrange(start: str, end: str, expected: list):
-    server = Server(port=TEST_PORT)
+def test_xadd_and_xrange(server: Server, start: str, end: str, expected: list):
     res1 = server.handle_command(
         Command(name="XADD", args=["stream_key", "0-1", "foo", "bar"])
     )
@@ -130,9 +135,7 @@ def test_xadd_and_xrange(start: str, end: str, expected: list):
     assert res.encode() == expected_value.encode()
 
 
-def test_xadd_and_xread():
-    server = Server(port=TEST_PORT)
-
+def test_xadd_and_xread(server: Server):
     resp = server.handle_command(
         Command(name="XADD", args=["stream_key", "0-1", "temperature", "96"])
     )
@@ -143,6 +146,30 @@ def test_xadd_and_xread():
         Command(name="XREAD", args=["STREAMS", "stream_key", "0-0"])
     )
     expected = [["stream_key", [["0-1", ["temperature", "96"]]]]]
+    expected_value = to_redis_value(expected)
+    assert res.encode() == expected_value.encode()
+
+
+def test_xread_multiple_streams(server: Server):
+    resp1 = server.handle_command(
+        Command(name="XADD", args=["stream_key", "0-1", "temperature", "95"])
+    )
+    resp2 = server.handle_command(
+        Command(name="XADD", args=["other_stream_key", "0-2", "humidity", "97"])
+    )
+    assert resp1.encode() == BulkString("0-1").encode()
+    assert resp2.encode() == BulkString("0-2").encode()
+
+    res = server.handle_command(
+        Command(
+            name="XREAD",
+            args=["streams", "stream_key", "other_stream_key", "0-0", "0-1"],
+        )
+    )
+    expected = [
+        ["stream_key", [["0-1", ["temperature", "95"]]]],
+        ["other_stream_key", [["0-2", ["humidity", "97"]]]],
+    ]
     expected_value = to_redis_value(expected)
     assert res.encode() == expected_value.encode()
 
