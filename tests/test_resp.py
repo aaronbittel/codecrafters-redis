@@ -103,6 +103,7 @@ def test_stream_slicing(start: str, expected_len: int):
     [
         ("0-2", "0-3", [["0-2", ["bar", "baz"]], ["0-3", ["baz", "foo"]]]),
         ("-", "0-2", [["0-1", ["foo", "bar"]], ["0-2", ["bar", "baz"]]]),
+        ("0-2", "+", [["0-2", ["bar", "baz"]], ["0-3", ["baz", "foo"]]]),
     ],
 )
 def test_xadd_and_xrange(start: str, end: str, expected: list):

@@ -75,8 +75,12 @@ class Stream:
         self, key: int | slice[StreamID]
     ) -> list[StreamValue] | StreamValue:
         if isinstance(key, slice):
+            if key.stop.milliseconds_time is None and key.stop.sequence_number is None:
+                stop = self.values[-1].id
+            else:
+                stop = key.stop
             return list(
-                filter(lambda value: key.start <= value.id <= key.stop, self.values)
+                filter(lambda value: key.start <= value.id <= stop, self.values)
             )
         return self.values[key]
 
@@ -108,7 +112,11 @@ class StreamID:
     @classmethod
     def from_str_xrange(cls, s: str, *, start: bool) -> Self:
         if s == "-":
+            assert start == True
             return cls(0, 0)
+        if s == "+":
+            assert start == False
+            return cls(None, None)
         if "-" in s:
             millis, seq = map(int, s.split("-", maxsplit=1))
             return cls(millis, seq)
