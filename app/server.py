@@ -15,6 +15,7 @@ from app.resp import (
     RedisValue,
     SimpleError,
     SimpleString,
+    Stream,
     StreamID,
     to_redis_value,
 )
@@ -255,6 +256,45 @@ class Server:
                 res.append(li)
             logger.info("res=%s", res)
             return to_redis_value(res)
+        elif cmd.name == "XREAD":
+            # NOTE: currently only 1 stream allowed
+            if len(cmd.args) != 3:
+                return SimpleError("XREAD cmd: expected STREAMS, from")
+            streams_keyword, key, from_exclusive = cmd.args
+            if streams_keyword.upper() != "STREAMS":
+                return SimpleError(
+                    f"XREAD cmd: expected STREAMS keyword, but got {streams_keyword}"
+                )
+            start_id = StreamID.from_str(from_exclusive)
+            logger.info("start_id=%s", start_id)
+            # NOTE: Make sure that given id is exclusive
+            start_id.sequence_number += 1
+            logger.info("exclusive: start_id=%s", start_id)
+            if key not in self.store:
+                return SimpleError(f"XREAD cmd: no stream stored with {key}")
+            stream = self.store[key]
+            if not isinstance(stream, Stream):
+                return SimpleError(
+                    "XREAD cmd: WRONGTYPE Operation against a key holding the wrong kind of value"
+                )
+            stream_range = stream[start_id:]
+            assert isinstance(stream_range, list)
+            outer = []
+            per_streamkey = [key]
+
+            stream_values = []
+            for val in stream_range:
+                li = [str(val.id)]
+                inner = []
+                for k, v in val.values.items():
+                    inner.append(k)
+                    inner.append(v)
+                li.append(inner)
+                stream_values.append(li)
+
+            per_streamkey.append(stream_values)
+            outer.append(per_streamkey)
+            return to_redis_value(outer)
         else:
             logger.error("unexpected command: %s", cmd)
             return SimpleError(f"unknown command {cmd.name}")

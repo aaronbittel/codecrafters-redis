@@ -130,6 +130,23 @@ def test_xadd_and_xrange(start: str, end: str, expected: list):
     assert res.encode() == expected_value.encode()
 
 
+def test_xadd_and_xread():
+    server = Server(port=TEST_PORT)
+
+    resp = server.handle_command(
+        Command(name="XADD", args=["stream_key", "0-1", "temperature", "96"])
+    )
+
+    assert resp.encode() == BulkString("0-1").encode()
+
+    res = server.handle_command(
+        Command(name="XREAD", args=["STREAMS", "stream_key", "0-0"])
+    )
+    expected = [["stream_key", [["0-1", ["temperature", "96"]]]]]
+    expected_value = to_redis_value(expected)
+    assert res.encode() == expected_value.encode()
+
+
 def test_to_redis_value():
     got = to_redis_value(
         [["0-1", ["foo", "bar"]], ["0-2", ["bar", "baz"]], ["0-3", ["baz", "foo"]]]
