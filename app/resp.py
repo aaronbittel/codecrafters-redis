@@ -70,6 +70,7 @@ class Stream:
             given_id.sequence_number = 0
         return given_id
 
+    # TODO: need to resolve id for xrange as well?
     def __getitem__(
         self, key: int | slice[StreamID]
     ) -> list[StreamValue] | StreamValue:
@@ -106,6 +107,8 @@ class StreamID:
 
     @classmethod
     def from_str_xrange(cls, s: str, *, start: bool) -> Self:
+        if s == "-":
+            return cls(0, 0)
         if "-" in s:
             millis, seq = map(int, s.split("-", maxsplit=1))
             return cls(millis, seq)

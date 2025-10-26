@@ -1,3 +1,4 @@
+from re import A
 import shlex
 import threading
 import time
@@ -82,7 +83,10 @@ def test_parse_command(cmd_parts: str, expected: Command):
     assert cmd.args == expected.args
 
 
-def test_stream_slicing():
+@pytest.mark.parametrize(
+    "start,expected_len", [(StreamID(0, 2), 2), (StreamID(0, 0), 3)]
+)
+def test_stream_slicing(start: str, expected_len: int):
     stream = Stream(
         values=[
             StreamValue(StreamID(0, 1), values={"foo": "bar"}),
@@ -90,12 +94,18 @@ def test_stream_slicing():
             StreamValue(StreamID(0, 3), values={"baz": "foo"}),
         ]
     )
-    stream_range = stream[StreamID(0, 2) : StreamID(0, 3)]
-    print("RANGE", stream_range)
-    assert len(stream_range) == 2
+    stream_range = stream[start : StreamID(0, 3)]
+    assert len(stream_range) == expected_len
 
 
-def test_xadd_and_xrange():
+@pytest.mark.parametrize(
+    "start,end,expected",
+    [
+        ("0-2", "0-3", [["0-2", ["bar", "baz"]], ["0-3", ["baz", "foo"]]]),
+        ("-", "0-2", [["0-1", ["foo", "bar"]], ["0-2", ["bar", "baz"]]]),
+    ],
+)
+def test_xadd_and_xrange(start: str, end: str, expected: list):
     server = Server(port=TEST_PORT)
     res1 = server.handle_command(
         Command(name="XADD", args=["stream_key", "0-1", "foo", "bar"])
@@ -111,29 +121,26 @@ def test_xadd_and_xrange():
     assert res2.encode() == BulkString("0-2").encode()
     assert res3.encode() == BulkString("0-3").encode()
 
-    res = server.handle_command(
-        Command(name="XRANGE", args=["stream_key", "0-2", "0-3"])
-    )
+    res = server.handle_command(Command(name="XRANGE", args=["stream_key", start, end]))
+    assert isinstance(res, Array)
+    assert len(res.values) == len(expected)
 
-    expected = to_redis_value(
+    expected_value = to_redis_value(expected)
+    assert res.encode() == expected_value.encode()
+
+
+def test_to_redis_value():
+    got = to_redis_value(
+        [["0-1", ["foo", "bar"]], ["0-2", ["bar", "baz"]], ["0-3", ["baz", "foo"]]]
+    )
+    expected = Array(
         [
-            [
-                "0-2",
-                [
-                    "bar",
-                    "baz",
-                ],
-            ],
-            [
-                "0-3",
-                [
-                    "baz",
-                    "foo",
-                ],
-            ],
+            Array([BulkString("0-1"), Array([BulkString("foo"), BulkString("bar")])]),
+            Array([BulkString("0-2"), Array([BulkString("bar"), BulkString("baz")])]),
+            Array([BulkString("0-3"), Array([BulkString("baz"), BulkString("foo")])]),
         ]
     )
-    assert res.encode() == expected.encode()
+    assert got == expected
 
 
 def test_simple_array():

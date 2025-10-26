@@ -253,6 +253,7 @@ class Server:
                     inner.append(value)
                 li.append(inner)
                 res.append(li)
+            logger.info("res=%s", res)
             return to_redis_value(res)
         else:
             logger.error("unexpected command: %s", cmd)
