@@ -1,13 +1,21 @@
 import shlex
 import threading
 import time
-from io import BufferedReader, BytesIO
+from io import BytesIO
 from typing import Generator
 
 import pytest
 
 from app.client import Client
-from app.resp import Command, as_bulk_bytes, as_error_bytes, create_command
+from app.resp import (
+    Array,
+    BulkString,
+    Command,
+    Stream,
+    StreamID,
+    StreamValue,
+    to_redis_value,
+)
 from app.server import Server
 
 TEST_PORT = 6666
@@ -40,14 +48,11 @@ def test_roundtrip_ping(client: Client):
 
 @pytest.mark.parametrize("msg", ["hi", '"Hello, World!"'])
 def test_roundtrip_echo_success(client: Client, msg: str):
-    assert client.echo(msg) == as_bulk_bytes(msg).decode()
+    assert client.echo(msg) == msg
 
 
 def test_roundtrip_echo_empty(client: Client):
-    assert (
-        client.echo("")
-        == as_error_bytes("ECHO cmd: wrong number of arguments").decode()
-    )
+    assert client.echo("") == "ECHO cmd: wrong number of arguments"
 
 
 @pytest.mark.parametrize(
@@ -70,8 +75,128 @@ def test_roundtrip_echo_empty(client: Client):
     ],
 )
 def test_parse_command(cmd_parts: str, expected: Command):
-    raw_cmd = BytesIO(bytes(create_command(*shlex.split(cmd_parts)), encoding="utf-8"))
-    reader = BufferedReader(raw_cmd)
+    raw_cmd = Array(shlex.split(cmd_parts)).encode()
+    reader = BytesIO(raw_cmd)
     cmd = Command.parse(reader)
     assert cmd.name == expected.name
     assert cmd.args == expected.args
+
+
+def test_stream_slicing():
+    stream = Stream(
+        values=[
+            StreamValue(StreamID(0, 1), values={"foo": "bar"}),
+            StreamValue(StreamID(0, 2), values={"bar": "baz"}),
+            StreamValue(StreamID(0, 3), values={"baz": "foo"}),
+        ]
+    )
+    stream_range = stream[StreamID(0, 2) : StreamID(0, 3)]
+    print("RANGE", stream_range)
+    assert len(stream_range) == 2
+
+
+def test_xadd_and_xrange():
+    server = Server(port=TEST_PORT)
+    res1 = server.handle_command(
+        Command(name="XADD", args=["stream_key", "0-1", "foo", "bar"])
+    )
+    res2 = server.handle_command(
+        Command(name="XADD", args=["stream_key", "0-2", "bar", "baz"])
+    )
+    res3 = server.handle_command(
+        Command(name="XADD", args=["stream_key", "0-3", "baz", "foo"])
+    )
+
+    assert res1.encode() == BulkString("0-1").encode()
+    assert res2.encode() == BulkString("0-2").encode()
+    assert res3.encode() == BulkString("0-3").encode()
+
+    res = server.handle_command(
+        Command(name="XRANGE", args=["stream_key", "0-2", "0-3"])
+    )
+
+    expected = to_redis_value(
+        [
+            [
+                "0-2",
+                [
+                    "bar",
+                    "baz",
+                ],
+            ],
+            [
+                "0-3",
+                [
+                    "baz",
+                    "foo",
+                ],
+            ],
+        ]
+    )
+    assert res.encode() == expected.encode()
+
+
+def test_simple_array():
+    array = Array(["Hello"])
+    expected = b"*1\r\n$5\r\nHello\r\n"
+    assert array.encode() == expected
+
+
+def test_simple_array2():
+    array = Array([Array(["Hello"])])
+    expected = b"*1\r\n*1\r\n$5\r\nHello\r\n"
+    assert array.encode() == expected
+
+
+def test_simple_array3():
+    array = Array(
+        [
+            "Hi",
+            Array(
+                ["Hello"],
+            ),
+        ],
+    )
+    expected = b"*2\r\n$2\r\nHi\r\n*1\r\n$5\r\nHello\r\n"
+    assert array.encode() == expected
+
+
+def test_resp_big_array():
+    array = Array(
+        [
+            Array(
+                [
+                    "1526985054069-0",
+                    Array(
+                        [
+                            "temperature",
+                            "36",
+                            "humidity",
+                            "95",
+                        ]
+                    ),
+                ]
+            ),
+            Array(
+                [
+                    "1526985054079-0",
+                    Array(
+                        [
+                            "temperature",
+                            "37",
+                            "humidity",
+                            "94",
+                        ]
+                    ),
+                ]
+            ),
+        ],
+    )
+    expected = (
+        "*2\r\n"
+        "*2\r\n$15\r\n1526985054069-0\r\n"
+        "*4\r\n$11\r\ntemperature\r\n$2\r\n36\r\n$8\r\nhumidity\r\n$2\r\n95\r\n"
+        "*2\r\n$15\r\n1526985054079-0\r\n"
+        "*4\r\n$11\r\ntemperature\r\n$2\r\n37\r\n$8\r\nhumidity\r\n$2\r\n94\r\n"
+    ).encode()
+    assert array.encode() == expected

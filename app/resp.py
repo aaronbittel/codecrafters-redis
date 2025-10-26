@@ -1,15 +1,8 @@
 from __future__ import annotations
 
-import logging
 import time
 from dataclasses import dataclass, field
-from io import BufferedReader
-from typing import IO, Self
-
-NULL_BULK_BYTES = b"$-1\r\n"
-OK_BYTES = b"+OK\r\n"
-EMPTY_ARRAY_BYTES = b"*0\r\n"
-NULL_ARRAY_BYTES = b"*-1\r\n"
+from typing import IO, Any, Protocol, Self
 
 
 @dataclass
@@ -77,8 +70,14 @@ class Stream:
             given_id.sequence_number = 0
         return given_id
 
-    def __getitem__(self, i: int) -> StreamValue:
-        return self.values[i]
+    def __getitem__(
+        self, key: int | slice[StreamID]
+    ) -> list[StreamValue] | StreamValue:
+        if isinstance(key, slice):
+            return list(
+                filter(lambda value: key.start <= value.id <= key.stop, self.values)
+            )
+        return self.values[key]
 
     def __len__(self) -> int:
         return len(self.values)
@@ -105,15 +104,17 @@ class StreamID:
             return cls(milliseconds_time=millis, sequence_number=None)
         return cls(milliseconds_time=millis, sequence_number=int(seq))
 
+    @classmethod
+    def from_str_xrange(cls, s: str, *, start: bool) -> Self:
+        if "-" in s:
+            millis, seq = map(int, s.split("-", maxsplit=1))
+            return cls(millis, seq)
+        millis = int(s)
+        seq = 0 if start else None
+        return cls(millis, seq)
+
     def __str__(self) -> str:
         return f"{self.milliseconds_time}-{self.sequence_number}"
-
-
-def create_command(*args: str) -> str:
-    def fmt(arg: str) -> str:
-        return f"${len(arg)}\r\n{arg}\r\n"
-
-    return f"*{len(args)}\r\n{''.join(fmt(arg) for arg in args)}"
 
 
 def dump_resp(resp: str) -> None:
@@ -126,38 +127,94 @@ def dump_resp(resp: str) -> None:
     print(dump if dump.strip() != "" else "(empty)")
 
 
-def as_bulk_bytes(s: str) -> bytes:
-    return f"${len(s)}\r\n{s}\r\n".encode()
+type RedisPrimitive = int | str
+type RedisValue = SimpleString | SimpleError | Integer | BulkString | Array
 
 
-def as_integer_bytes(n: int) -> bytes:
-    return f":{n}\r\n".encode()
+class RedisEncodable(Protocol):
+    def encode(self) -> bytes: ...
 
 
-def as_array_bytes(xs: list[str]) -> bytes:
-    def fmt(arg: str) -> str:
-        return f"${len(arg)}\r\n{arg}\r\n"
+@dataclass
+class SimpleString(RedisEncodable):
+    value: str
 
-    return f"*{len(xs)}\r\n{''.join(fmt(x) for x in xs)}".encode()
-
-
-def as_error_bytes(msg: str) -> bytes:
-    return f"-ERR {msg}\r\n".encode()
+    def encode(self) -> bytes:
+        return f"+{self.value}\r\n".encode()
 
 
-def as_simple_string_bytes(s: str) -> bytes:
-    return f"+{s}\r\n".encode()
+@dataclass
+class SimpleError(RedisEncodable):
+    msg: str
+
+    def encode(self) -> bytes:
+        return f"-ERR {self.msg}\r\n".encode()
 
 
-def _safe_read(reader: BufferedReader, size: int) -> bytes:
+@dataclass
+class Integer(RedisEncodable):
+    value: int
+
+    def encode(self) -> bytes:
+        return f":{self.value}\r\n".encode()
+
+
+@dataclass
+class BulkString(RedisEncodable):
+    value: str | None
+
+    def encode(self) -> bytes:
+        if self.value is None:
+            return b"$-1\r\n"
+        return f"${len(self.value)}\r\n{self.value}\r\n".encode()
+
+
+@dataclass
+class Array(RedisEncodable):
+    values: list[RedisValue | RedisPrimitive] | None
+
+    def encode(self) -> bytes:
+        if self.values is None:
+            return b"*-1\r\n"
+        out = f"*{len(self.values)}\r\n".encode()
+        for value in self.values:
+            if isinstance(value, str):
+                value = BulkString(value)
+            elif isinstance(value, int):
+                value = Integer(value)
+            out += value.encode()
+        return out
+
+
+@dataclass
+class Null(RedisEncodable):
+    def encode(self) -> bytes:
+        return b"_\r\n"
+
+
+def to_redis_value(value: list[Any]) -> RedisEncodable:
+    if isinstance(value, str):
+        return BulkString(value)
+    elif isinstance(value, list):
+        return Array([to_redis_value(val) for val in value])
+    else:
+        raise TypeError(value)
+
+
+RESP_OK = SimpleString("OK")
+EMPTY_ARRAY = Array([])
+NULL_ARRAY = Array(None)
+
+
+def _safe_read(reader: IO[bytes], size: int) -> bytes:
     data = reader.read(size)
     if not data:
         raise ConnectionResetError("client closed connection")
     return data
 
 
-def _safe_readline(reader: BufferedReader, size: int | None = -1) -> bytes:
-    line = reader.readline(size)
+def _safe_readline(reader: IO[bytes], limit: int = -1) -> bytes:
+    line = reader.readline(limit)
     if not line:
         raise ConnectionResetError("client closed connection")
     return line

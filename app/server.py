@@ -7,12 +7,16 @@ import time
 from app import resp
 from app.config import PORT
 from app.resp import (
+    EMPTY_ARRAY,
+    Array,
+    BulkString,
     Command,
-    as_array_bytes,
-    as_bulk_bytes,
-    as_error_bytes,
-    as_integer_bytes,
-    as_simple_string_bytes,
+    Integer,
+    RedisValue,
+    SimpleError,
+    SimpleString,
+    StreamID,
+    to_redis_value,
 )
 
 logger = logging.getLogger("SERVER")
@@ -56,47 +60,48 @@ class Server:
                 logger.info("client %d disconnected.", sock.getsockname()[1])
                 break
             logger.info("parsed cmd: %s", cmd)
-            sock.sendall(self.handle_command(cmd))
+            resp = self.handle_command(cmd).encode()
+            sock.sendall(resp)
 
         sock.close()
 
-    def handle_command(self, cmd: Command) -> bytes:
+    def handle_command(self, cmd: Command) -> RedisValue:
         if cmd.name == "PING":
-            return b"+PONG\r\n"
+            return SimpleString("PONG")
         elif cmd.name == "ECHO":
             if len(cmd.args) != 1 or cmd.args[0] == "":
-                return as_error_bytes("ECHO cmd: wrong number of arguments")
-            return as_bulk_bytes(cmd.args[0])
+                return SimpleError("ECHO cmd: wrong number of arguments")
+            return BulkString(cmd.args[0])
         elif cmd.name == "SET":
             if len(cmd.args) < 2:
-                return as_error_bytes("SET cmd: expected key and value")
+                return SimpleError("SET cmd: expected key and value")
             key, value, *options = cmd.args
             self.store[key] = value
             for i, opt in enumerate(options):
                 if opt.upper() == "PX":
                     if len(options) <= i + 1:
-                        return as_error_bytes(
+                        return SimpleError(
                             "SET cmd: expected millis value for px option"
                         )
                     try:
                         ttl = int(options[i + 1])
                     except ValueError:
-                        return as_error_bytes("SET cmd: PX option must be an integer")
+                        return SimpleError("SET cmd: PX option must be an integer")
                     threading.Timer(
                         ttl / 1000, function=self.store.pop, args=(key,)
                     ).start()
-            return resp.OK_BYTES
+            return resp.RESP_OK
         elif cmd.name == "GET":
             if len(cmd.args) != 1:
-                return as_error_bytes("GET cmd: expected key")
+                return SimpleError("GET cmd: expected key")
             key = cmd.args[0]
             value = self.store.get(key)
             if value:
-                return as_bulk_bytes(value)
-            return resp.NULL_BULK_BYTES
+                return BulkString(value)
+            return BulkString(None)
         elif cmd.name == "RPUSH":
             if len(cmd.args) < 2:
-                return as_error_bytes("RPUSH cmd: expected key and value")
+                return SimpleError("RPUSH cmd: expected key and value")
             key, *values = cmd.args
             if key not in self.store:
                 self.store[key] = []
@@ -105,27 +110,31 @@ class Server:
             )
             for value in values:
                 self.store[key].append(value)
-            return as_integer_bytes(len(self.store[key]))
+            return Integer(len(self.store[key]))
         elif cmd.name == "LRANGE":
             if len(cmd.args) != 3:
-                return as_error_bytes("LRANGE cmd: expected key, start, end")
+                return SimpleError("LRANGE cmd: expected key, start, end")
             try:
-                key, start, end = cmd.args[0], int(cmd.args[1]), int(cmd.args[2])
+                key, start_str, end_str = (
+                    cmd.args[0],
+                    int(cmd.args[1]),
+                    int(cmd.args[2]),
+                )
             except ValueError:
-                return as_error_bytes("LRANGE cmd: expected integer for start, end")
+                return SimpleError("LRANGE cmd: expected integer for start, end")
             li = self.store.get(key)
             if li is None:
-                return resp.EMPTY_ARRAY_BYTES
+                return resp.EMPTY_ARRAY
             assert isinstance(li, list), f"LRANGE cmd: expected {li} to be a list"
-            if start < 0:
-                start = len(li) + start if start >= -len(li) else 0
-            end = min(end if end >= 0 else len(li) + end, len(li) - 1)
-            if start >= len(li) or start > end:
-                return resp.EMPTY_ARRAY_BYTES
-            return as_array_bytes(li[start : end + 1])
+            if start_str < 0:
+                start_str = len(li) + start_str if start_str >= -len(li) else 0
+            end_str = min(end_str if end_str >= 0 else len(li) + end_str, len(li) - 1)
+            if start_str >= len(li) or start_str > end_str:
+                return resp.EMPTY_ARRAY
+            return Array(li[start_str : end_str + 1])
         elif cmd.name == "LPUSH":
             if len(cmd.args) < 2:
-                return as_error_bytes("LPUSH cmd: expected key and value")
+                return SimpleError("LPUSH cmd: expected key and value")
             key, *values = cmd.args
             if key not in self.store:
                 self.store[key] = []
@@ -134,53 +143,53 @@ class Server:
             )
             for value in values:
                 self.store[key].insert(0, value)
-            return as_integer_bytes(len(self.store[key]))
+            return Integer(len(self.store[key]))
         elif cmd.name == "LLEN":
             if len(cmd.args) != 1:
-                return as_error_bytes("LLEN cmd: expected key")
+                return SimpleError("LLEN cmd: expected key")
             key = cmd.args[0]
-            return as_integer_bytes(len(self.store.get(key, [])))
+            return Integer(len(self.store.get(key, [])))
         elif cmd.name == "LPOP":
             if len(cmd.args) < 1:
-                return as_error_bytes("LPOP cmd: expected key")
+                return SimpleError("LPOP cmd: expected key")
             key = cmd.args[0]
             li = self.store.get(key)
             if li is None:
-                return resp.NULL_BULK_BYTES
+                return resp.NULL_BULK
             assert isinstance(li, list), f"LPOP cmd: expected {li} to be a list"
             if len(li) == 0:
-                return resp.NULL_BULK_BYTES
+                return resp.NULL_BULK
             if len(cmd.args) == 1:
                 item = li.pop(0)
-                return as_bulk_bytes(item)
+                return BulkString(item)
             try:
                 count = int(cmd.args[1])
             except ValueError:
-                return as_error_bytes("LPOP cmd: expected integer for count")
+                return SimpleError("LPOP cmd: expected integer for count")
             count = count if count <= len(li) else len(li)
-            return as_array_bytes([li.pop(0) for _ in range(count)])
+            return Array([li.pop(0) for _ in range(count)])
         elif cmd.name == "BLPOP":
             if len(cmd.args) != 2:
-                return as_error_bytes("BLPOP cmd: expected key and timeout")
+                return SimpleError("BLPOP cmd: expected key and timeout")
             try:
                 key, timeout = cmd.args[0], float(cmd.args[1])
             except ValueError:
-                return as_error_bytes("BLPOP cmd: expected number for timeout")
+                return SimpleError("BLPOP cmd: expected number for timeout")
             item: str | None = None
             sleep_time_s = 50 / 1000
             cur_time = 0.0
             while True:
                 item = self._get_item(key)
                 if item is not None:
-                    return as_array_bytes([key, item])
+                    return Array([key, item])
                 elif timeout != 0 and cur_time >= timeout:
                     # timeout hit
-                    return resp.NULL_ARRAY_BYTES
+                    return resp.NULL_ARRAY
                 cur_time += sleep_time_s
                 time.sleep(sleep_time_s)
         elif cmd.name == "TYPE":
             if len(cmd.args) != 1:
-                return as_error_bytes("TYPE cmd: expected key")
+                return SimpleError("TYPE cmd: expected key")
             key = cmd.args[0]
             typ = ""
             if key not in self.store:
@@ -189,21 +198,21 @@ class Server:
                 typ = "stream"
             else:
                 typ = "string"
-            return as_simple_string_bytes(typ)
+            return SimpleString(typ)
         elif cmd.name == "XADD":
             # NOTE: What to do if no key-value pairs a given?
             if len(cmd.args) <= 2:
-                return as_error_bytes("XADD cmd: expected key, id")
+                return SimpleError("XADD cmd: expected key, id")
             key, id_str, *values = cmd.args
             if key not in self.store:
                 self.store[key] = resp.Stream()
             elif not isinstance(self.store[key], resp.Stream):
                 # TODO: Add this to the other commands as well
-                return as_error_bytes(
+                return SimpleError(
                     "XADD cmd: WRONGTYPE Operation against a key holding the wrong kind of value"
                 )
             if len(values) % 2 != 0:
-                return as_error_bytes("XADD cmd: no value given for key")
+                return SimpleError("XADD cmd: no value given for key")
 
             stream = self.store[key]
             assert isinstance(stream, resp.Stream), (
@@ -212,11 +221,42 @@ class Server:
             try:
                 stream.append(id_str, dict(zip(values[::2], values[1::2])))
             except ValueError as v:
-                return as_error_bytes(v)
-            return as_bulk_bytes(str(stream[-1].id))
+                return SimpleError(v)
+            return BulkString(str(stream[-1].id))
+        elif cmd.name == "XRANGE":
+            if len(cmd.args) != 3:
+                return SimpleError("XRANGE cmd: expected key, start, end")
+            key, start_str, end_str = cmd.args
+            if key not in self.store:
+                return EMPTY_ARRAY
+            stream = self.store[key]
+            if not isinstance(stream, resp.Stream):
+                return SimpleError(
+                    "XRANGE cmd: WRONGTYPE Operation against a key holding the wrong kind of value"
+                )
+            start_id = StreamID.from_str_xrange(start_str, start=True)
+            end_id = StreamID.from_str_xrange(end_str, start=False)
+            logger.info("start_id=%s", start_id)
+            logger.info("end_id=%s", end_id)
+            stream_range = stream[start_id:end_id]
+            assert isinstance(stream_range, list), (
+                f"XRANGE cmd: expected {stream_range} to be a list"
+            )
+            logger.info("stream_range=%s", stream_range)
+            res = []
+            for entry in stream_range:
+                li = []
+                li.append(str(entry.id))
+                inner = []
+                for key, value in entry.values.items():
+                    inner.append(key)
+                    inner.append(value)
+                li.append(inner)
+                res.append(li)
+            return to_redis_value(res)
         else:
             logger.error("unexpected command: %s", cmd)
-            return as_error_bytes(f"unknown command {cmd.name}")
+            return SimpleError(f"unknown command {cmd.name}")
 
     def _get_item(self, key: str) -> str | None:
         li = self.store.get(key)

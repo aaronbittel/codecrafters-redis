@@ -4,7 +4,7 @@ import shlex
 import socket
 
 from app.config import PORT
-from app.resp import as_array_bytes, create_command, dump_resp
+from app.resp import Array, dump_resp
 
 logger = logging.getLogger("CLIENT")
 
@@ -26,12 +26,12 @@ class Client:
             self.server_sock = None
 
     def ping(self) -> str:
-        self.sock.sendall(as_array_bytes(["PING"]))
+        self.sock.sendall(Array(["PING"]).encode())
         # TODO: write parser for receiving commands
         return self.sock.recv(1024).decode()
 
     def echo(self, msg: str) -> str:
-        self.sock.sendall(as_array_bytes(["ECHO", msg]))
+        self.sock.sendall(Array(["ECHO", msg]).encode())
         return self.sock.recv(1024).decode()
 
     @property
@@ -41,9 +41,9 @@ class Client:
         return self.server_sock
 
 
-def roundtrip(sock: socket.socket, cmd: str) -> bytes:
-    sock.sendall(cmd.encode())
-    logger.debug(f"Raw Send: {repr(cmd)}")
+def roundtrip(sock: socket.socket, req: Array) -> bytes:
+    sock.sendall(req.encode())
+    logger.debug(f"Raw Send: {repr(req.encode())}")
     resp = sock.recv(1024)
     logger.debug(f"Raw Got: {repr(resp.decode())}")
     return resp
@@ -56,7 +56,9 @@ def cli_main(port: int) -> None:
             cmd = input("> ")
             if cmd.strip() in ("quit", "q", "exit"):
                 break
-            raw_resp = roundtrip(sock, create_command(*shlex.split(cmd)))
+            req = Array(shlex.split(cmd))
+            raw_resp = roundtrip(sock, req)
+            print("resp", repr(raw_resp))
             resp = raw_resp.decode()
             dump_resp(resp)
 
